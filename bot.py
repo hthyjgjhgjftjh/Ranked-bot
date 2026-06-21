@@ -3,14 +3,16 @@ from discord import app_commands
 from discord.ext import commands
 import sqlite3
 from datetime import datetime
+import os  # Added for securely loading environment variables
 
 # --- CONFIGURATION ---
 ALLOWED_ROLE_ID = 1517891459372683404
 LEADERBOARD_BANNER_URL = "https://media.discordapp.net/attachments/1463637945280889066/1502588316430897212/image.png?ex=6a37a0eb&is=6a364f6b&hm=232f0a35cb250c58de10af807b80f000265e7823695cc690be6951b8234e7fd1&=&format=webp&quality=lossless&width=717&height=420"
 # ---------------------
 
-# Database setup
-conn = sqlite3.connect('stats.db')
+# Database setup - Using /app/data/ path for Railway Persistent Volumes
+db_path = '/app/data/stats.db' if os.path.exists('/app/data') else 'stats.db'
+conn = sqlite3.connect(db_path)
 c = conn.cursor()
 
 # Create baseline stats table
@@ -26,6 +28,8 @@ if "country" not in columns:
     c.execute('ALTER TABLE stats ADD COLUMN country TEXT DEFAULT ""')
 if "ties" not in columns:
     c.execute('ALTER TABLE stats ADD COLUMN ties INTEGER DEFAULT 0')
+if "custom_name" not in columns:
+    c.execute('ALTER TABLE stats ADD COLUMN custom_name TEXT DEFAULT ""')
 conn.commit()
 
 # Config table for managing live leaderboard messages
@@ -56,6 +60,43 @@ def get_flag_emoji(country_input: str) -> str:
 def get_current_timestamp() -> str:
     return f"Last Updated: {datetime.now().strftime('%Y-%m-%d %I:%M %p')} UTC"
 
+def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embed:
+    """Helper to cleanly build the leaderboard embed structure."""
+    max_rank = max([row[1] for row in rows]) if rows else 16
+    range_end = max(1, max_rank)
+    
+    embed = discord.Embed(title=f"🏆 **MAIN LEADERBOARD | 1-{range_end}** 🏆", color=discord.Color.gold())
+    
+    if not rows:
+        embed.description = "The leaderboard is currently empty."
+    else:
+        description = ""
+        for index, (uid, rank, streak, country, custom_name) in enumerate(rows):
+            if index == 0: medal = "🥇 "
+            elif index == 1: medal = "🥈 "
+            elif index == 2: medal = "🥉 "
+            else: medal = f"**{rank}:** "
+            
+            user = guild.get_member(uid)
+            mention = user.mention if user else f"<@{uid}>"
+                
+            if custom_name:
+                name_display = f"**{custom_name}** ({mention})"
+            else:
+                name_display = mention
+
+            flag = get_flag_emoji(country)
+            streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
+            description += f"> {medal}{flag}{name_display}{streak_tag}\n"
+            
+        embed.description = description
+
+    if LEADERBOARD_BANNER_URL:
+        embed.set_image(url=LEADERBOARD_BANNER_URL)
+
+    embed.set_footer(text=get_current_timestamp())
+    return embed
+
 @bot.event
 async def on_ready():
     await bot.tree.sync()
@@ -70,49 +111,11 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
 # --- LIVE REFRESH HELPER ---
 async def update_live_leaderboard(guild: discord.Guild):
-    """Fetches data and automatically updates the live leaderboard message."""
-    c.execute('SELECT user_id, rank, streak, country FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
+    """Fetches data and automatically updates the active live tracking message."""
+    c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
     rows = c.fetchall()
     
-    # Dynamically find the highest rank number present up to 16
-    max_rank = max([row[1] for row in rows]) if rows else 16
-    range_end = max(1, max_rank)
-    
-    embed = discord.Embed(title=f"🏆 **MAIN LEADERBOARD | 1-{range_end}** 🏆", color=discord.Color.gold())
-    
-    if not rows:
-        embed.description = "The leaderboard is currently empty."
-    else:
-        description = ""
-        for index, (uid, rank, streak, country) in enumerate(rows):
-            if index == 0: medal = "🥇 "
-            elif index == 1: medal = "🥈 "
-            elif index == 2: medal = "🥉 "
-            else: medal = f"**{rank}:** "
-            
-            user = guild.get_member(uid)
-            if not user:
-                try:
-                    user = await bot.fetch_user(uid)
-                    name = user.mention
-                except:
-                    name = f"<@{uid}>"
-            else:
-                name = user.mention
-                
-            flag = get_flag_emoji(country)
-            
-            # STREAK FILTER: Only show streak tag if it's 2 or higher
-            streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
-            
-            description += f"> {medal}{flag}{name}{streak_tag}\n"
-            
-        embed.description = description
-
-    if LEADERBOARD_BANNER_URL:
-        embed.set_image(url=LEADERBOARD_BANNER_URL)
-
-    embed.set_footer(text=get_current_timestamp())
+    embed = generate_leaderboard_embed(rows, guild)
 
     c.execute('SELECT value_id FROM config WHERE key = "channel_id"')
     channel_row = c.fetchone()
@@ -128,67 +131,48 @@ async def update_live_leaderboard(guild: discord.Guild):
             except discord.NotFound:
                 pass
 
-# --- LEADERBOARD COMMAND ---
-@bot.tree.command(name="leaderboard", description="View or setup the live top 16 players leaderboard")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
-async def leaderboard(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-
-    c.execute('SELECT user_id, rank, streak, country FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
-    rows = c.fetchall()
+# --- LEADERBOARD GROUP COMMANDS ---
+class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Leaderboard configurations"):
     
-    # Dynamically find the highest rank number present up to 16
-    max_rank = max([row[1] for row in rows]) if rows else 16
-    range_end = max(1, max_rank)
-    
-    embed = discord.Embed(title=f"🏆 **MAIN LEADERBOARD | 1-{range_end}** 🏆", color=discord.Color.gold())
-    
-    if not rows:
-        embed.description = "The leaderboard is currently empty."
-    else:
-        description = ""
-        for index, (uid, rank, streak, country) in enumerate(rows):
-            if index == 0: medal = "🥇 "
-            elif index == 1: medal = "🥈 "
-            elif index == 2: medal = "🥉 "
-            else: medal = f"**{rank}:** "
-            
-            user = interaction.guild.get_member(uid)
-            if not user:
-                try:
-                    user = await bot.fetch_user(uid)
-                    name = user.mention
-                except:
-                    name = f"<@{uid}>"
-            else:
-                name = user.mention
-                
-            flag = get_flag_emoji(country)
-            
-            # STREAK FILTER: Only show streak tag if it's 2 or higher
-            streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
-            
-            description += f"> {medal}{flag}{name}{streak_tag}\n"
-            
-        embed.description = description
+    @app_commands.command(name="setup", description="Spawn the live-updating leaderboard tracking message")
+    @app_commands.checks.has_role(ALLOWED_ROLE_ID)
+    async def setup(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
 
-    if LEADERBOARD_BANNER_URL:
-        embed.set_image(url=LEADERBOARD_BANNER_URL)
+        c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
+        rows = c.fetchall()
+        
+        embed = generate_leaderboard_embed(rows, interaction.guild)
+        msg = await interaction.channel.send(embed=embed)
+        
+        # Save this specific message to database config for live background tracking
+        c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
+        c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
+        conn.commit()
+        
+        await interaction.followup.send("✅ Live tracking leaderboard spawned and configured successfully!", ephemeral=True)
 
-    embed.set_footer(text=get_current_timestamp())
+    @app_commands.command(name="view", description="Check the current leaderboard standings instantly")
+    async def view(self, interaction: discord.Interaction):
+        # Accessible to everyone, doesn't mess up live tracking configurations
+        await interaction.response.defer(ephemeral=False)
+        
+        c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
+        rows = c.fetchall()
+        
+        embed = generate_leaderboard_embed(rows, interaction.guild)
+        await interaction.followup.send(embed=embed)
 
-    msg = await interaction.channel.send(embed=embed)
-    await interaction.delete_original_response()
-    
-    c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
-    c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
-    conn.commit()
+bot.tree.add_command(LeaderboardGroup())
 
 # --- RANK POSITION COMMANDS ---
 @bot.tree.command(name="set_lb_position", description="Add/Move user to a specific leaderboard position")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
-@app_commands.describe(country="Optional: 2-letter code (e.g. US, GB, FR) or an emoji flag")
-async def set_lb_position(interaction: discord.Interaction, user: discord.Member, position: int, country: str = ""):
+@app_commands.describe(
+    country="Optional: 2-letter code (e.g. US, GB, FR) or an emoji flag",
+    custom_name="Optional: The player's clean name to show beside their @mention"
+)
+async def set_lb_position(interaction: discord.Interaction, user: discord.Member, position: int, country: str = "", custom_name: str = ""):
     if position < 1 or position > 16:
         await interaction.response.send_message("❌ Position must be between 1 and 16.", ephemeral=True)
         return
@@ -202,8 +186,9 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
         c.execute('UPDATE stats SET rank = rank - 1 WHERE rank > ?', (existing_row[0],))
 
     c.execute('UPDATE stats SET rank = rank + 1 WHERE rank >= ?', (position,))
-    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country) VALUES (?, 0, 0, 0, 0, 0, "")', (user.id,))
-    c.execute('UPDATE stats SET rank = ?, country = ? WHERE user_id = ?', (position, country, user.id))
+    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
+    
+    c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, country, custom_name, user.id))
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
     conn.commit()
     
@@ -243,8 +228,7 @@ async def reset_stats(interaction: discord.Interaction, user: discord.Member):
         old_rank = row[0]
         c.execute('UPDATE stats SET rank = rank - 1 WHERE rank > ?', (old_rank,))
     
-    c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
-    c.execute('UPDATE stats SET wins = 0, losses = 0, ties = 0, rank = 0, streak = 0, country = "" WHERE user_id = ?', (user.id,))
+    c.execute('UPDATE stats SET wins = 0, losses = 0, ties = 0, rank = 0, streak = 0, country = "", custom_name = "" WHERE user_id = ?', (user.id,))
     conn.commit()
     
     await interaction.followup.send(f"🔄 Stats for {user.mention} have been reset to zero and they have been unranked.", ephemeral=True)
@@ -258,7 +242,7 @@ async def set_streak(interaction: discord.Interaction, user: discord.Member, amo
         await interaction.response.send_message("❌ Streak amount cannot be negative.", ephemeral=True)
         return
         
-    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country) VALUES (?, 0, 0, 0, 0, 0, "")', (user.id,))
+    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET streak = ? WHERE user_id = ?', (amount, user.id))
     conn.commit()
     
@@ -268,7 +252,7 @@ async def set_streak(interaction: discord.Interaction, user: discord.Member, amo
 @bot.tree.command(name="add_win", description="Give a user a win")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 async def add_win(interaction: discord.Interaction, user: discord.Member):
-    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country) VALUES (?, 0, 0, 0, 0, 0, "")', (user.id,))
+    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET wins = wins + 1, streak = streak + 1 WHERE user_id = ?', (user.id,))
     conn.commit()
     await interaction.response.send_message(f"Added a win to {user.mention}!")
@@ -285,7 +269,7 @@ async def remove_win(interaction: discord.Interaction, user: discord.Member):
 @bot.tree.command(name="add_loss", description="Give a user a loss")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 async def add_loss(interaction: discord.Interaction, user: discord.Member):
-    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country) VALUES (?, 0, 0, 0, 0, 0, "")', (user.id,))
+    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET losses = losses + 1, streak = 0 WHERE user_id = ?', (user.id,))
     conn.commit()
     await interaction.response.send_message(f"Added a loss to {user.mention}. Streak broken!")
@@ -302,7 +286,7 @@ async def remove_loss(interaction: discord.Interaction, user: discord.Member):
 @bot.tree.command(name="add_tie", description="Give a user a tie")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 async def add_tie(interaction: discord.Interaction, user: discord.Member):
-    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country) VALUES (?, 0, 0, 0, 0, 0, "")', (user.id,))
+    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET ties = ties + 1 WHERE user_id = ?', (user.id,))
     conn.commit()
     await interaction.response.send_message(f"Added a tie to {user.mention}! (Streak preserved)")
@@ -319,29 +303,26 @@ async def remove_tie(interaction: discord.Interaction, user: discord.Member):
 @bot.tree.command(name="stats", description="Check stats")
 async def stats(interaction: discord.Interaction, user: discord.Member = None):
     target = user or interaction.user
-    c.execute('SELECT wins, losses, rank, streak, country, ties FROM stats WHERE user_id = ?', (target.id,))
+    c.execute('SELECT wins, losses, rank, streak, country, ties, custom_name FROM stats WHERE user_id = ?', (target.id,))
     row = c.fetchone()
     
     if not row:
         await interaction.response.send_message("No stats found for this user.")
         return
         
-    wins, losses, rank, streak, country, ties = row
+    wins, losses, rank, streak, country, ties, custom_name = row
     total = wins + losses + ties
     
-    if total >= 10:
-        win_pct = (wins / total * 100) if total > 0 else 0
-        winrate_display = f"{win_pct:.1f}%"
-    else:
-        games_needed = 10 - total
-        winrate_display = f"🔒 Unlocks in {games_needed} more game{'s' if games_needed > 1 else ''}"
+    win_pct = (wins / total * 100) if total > 0 else 0
+    winrate_display = f"{win_pct:.1f}%"
     
-    # Text fallback format if checked via individual cards
     streak_display = f"{streak}x 🔥" if streak >= 2 else f"{streak} game" if streak == 1 else f"{streak} games"
     flag = get_flag_emoji(country)
 
     embed = discord.Embed(title="Ranked Tracker", color=discord.Color.blue())
-    embed.description = f"Stats for {flag}{target.mention}"
+    display_title = f"{custom_name} ({target.mention})" if custom_name else target.mention
+    embed.description = f"Stats for {flag}{display_title}"
+    
     embed.add_field(name="Rank", value=str(rank) if rank > 0 else "Unranked", inline=True)
     embed.add_field(name="Current Streak", value=streak_display, inline=True)
     embed.add_field(name="Wins", value=str(wins), inline=True)
@@ -350,7 +331,6 @@ async def stats(interaction: discord.Interaction, user: discord.Member = None):
     embed.add_field(name="Win Rate", value=winrate_display, inline=False)
     
     embed.set_footer(text=get_current_timestamp())
-    
     await interaction.response.send_message(embed=embed)
 
-bot.run(os.environ['DISCORD_TOKEN'])
+bot.run(os.getenv('DISCORD_TOKEN'))
