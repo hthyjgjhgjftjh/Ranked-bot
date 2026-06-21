@@ -10,7 +10,7 @@ import os  # Added for securely loading environment variables
 ALLOWED_ROLE_IDS = [1517891459372683404, 1517852942122614844] 
 
 # Remember to change this to an external permanent URL (like Imgur/Postimages) so it doesn't expire!
-LEADERBOARD_BANNER_URL = "https://media.discordapp.net/attachments/1463637945280889066/1502588316430897212/image.png"
+LEADERBOARD_BANNER_URL = "https://cdn.discordapp.com/attachments/1463637945280889066/1502588316430897212/image.png?ex=6a38f26b&is=6a37a0eb&hm=85dfdefedc6d7a3f1574e56a8484f389cc1b0bc1450a63589500f009b8eb637c"
 # ---------------------
 
 # Database setup - Using /app/data/ path for Railway Persistent Volumes
