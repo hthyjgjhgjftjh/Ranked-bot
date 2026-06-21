@@ -3,7 +3,8 @@ from discord import app_commands
 from discord.ext import commands
 import sqlite3
 from datetime import datetime
-import os  # Added for securely loading environment variables
+import os 
+from typing import Optional
 
 # --- CONFIGURATION ---
 ALLOWED_ROLE_ID = 1517891459372683404
@@ -89,8 +90,9 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
 
             mention = f"<@{uid}>"
 
-            if custom_name:
-                name_display = f"**{custom_name}** {mention}"
+            # Check if custom_name exists and is not just an empty string layout literal
+            if custom_name and str(custom_name).strip() != "":
+                name_display = f"**{str(custom_name).strip()}** {mention}"
             elif user:
                 name_display = f"**{user.display_name}** {mention}"
             else:
@@ -181,7 +183,13 @@ bot.tree.add_command(LeaderboardGroup())
     country="Optional: 2-letter code (e.g. US, GB, FR) or an emoji flag",
     custom_name="Optional: The player's clean name to show beside their @mention"
 )
-async def set_lb_position(interaction: discord.Interaction, user: discord.Member, position: int, country: str = "", custom_name: str = ""):
+async def set_lb_position(
+    interaction: discord.Interaction, 
+    user: discord.Member, 
+    position: int, 
+    country: Optional[str] = None, 
+    custom_name: Optional[str] = None
+):
     if position < 1 or position > 16:
         await interaction.response.send_message("❌ Position must be between 1 and 16.", ephemeral=True)
         return
@@ -198,14 +206,14 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
     
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     
-    # FIXED: Dynamically build the update query so existing names/countries are never accidentally cleared out
+    # FIXED: Reconfigured update builders to strictly track clear incoming state variations (Optional/None definitions)
     query = 'UPDATE stats SET rank = ?'
     params = [position]
     
-    if country != "":
+    if country is not None:
         query += ', country = ?'
         params.append(country)
-    if custom_name != "":
+    if custom_name is not None:
         query += ', custom_name = ?'
         params.append(custom_name)
         
@@ -344,7 +352,7 @@ async def stats(interaction: discord.Interaction, user: discord.Member = None):
     flag = get_flag_emoji(country)
 
     embed = discord.Embed(title="Ranked Tracker", color=discord.Color.blue())
-    display_title = f"{custom_name} {target.mention}" if custom_name else target.mention
+    display_title = f"{custom_name} {target.mention}" if (custom_name and str(custom_name).strip() != "") else target.mention
     embed.description = f"Stats for {flag}{display_title}"
     
     embed.add_field(name="Rank", value=str(rank) if rank > 0 else "Unranked", inline=True)
