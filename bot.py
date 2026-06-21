@@ -88,7 +88,6 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
             mention = user.mention if user else f"<@{uid}>"
                 
             if custom_name:
-                # FIXED: Removed the brackets surrounding the user @mention
                 name_display = f"**{custom_name}** {mention}"
             else:
                 name_display = mention
@@ -162,7 +161,6 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
 
     @app_commands.command(name="view", description="Check the current leaderboard standings instantly")
     async def view(self, interaction: discord.Interaction):
-        # Accessible to everyone, doesn't mess up live tracking configurations
         await interaction.response.defer(ephemeral=False)
         
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
@@ -194,8 +192,11 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
         c.execute('UPDATE stats SET rank = rank - 1 WHERE rank > ?', (existing_row[0],))
 
     c.execute('UPDATE stats SET rank = rank + 1 WHERE rank >= ?', (position,))
+    
+    # FIXED: Handled base layout tracking using INSERT OR IGNORE cleanly without overriding existing metadata placeholders
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     
+    # Force updating exactly the targeted user profile metrics contextually
     c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, country, custom_name, user.id))
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
     conn.commit()  # Forces SQLite database file write immediately
