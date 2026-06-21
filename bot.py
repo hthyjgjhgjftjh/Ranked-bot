@@ -72,7 +72,6 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
     else:
         description = ""
         for index, (uid, rank, streak, country, custom_name) in enumerate(rows):
-            # FIXED: Insert a divider of dots right before processing the 4th place (index 3)
             if index == 3:
                 description += "> ⸻⸻⸻⸻⸻\n"
 
@@ -89,12 +88,16 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
                 except discord.HTTPException:
                     user = None
 
+            # Generate the reliable user mention string
+            mention = f"<@{uid}>"
+
+            # FIXED: Combine BOTH the text display name and the active clickable mention.
             if custom_name:
-                name_display = f"**{custom_name}**"
+                name_display = f"**{custom_name}** ({mention})"
             elif user:
-                name_display = f"**{user.display_name}**"
+                name_display = f"**{user.display_name}** ({mention})"
             else:
-                name_display = f"**Unknown ({uid})**"
+                name_display = mention
 
             flag = get_flag_emoji(country)
             streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
