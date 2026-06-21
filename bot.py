@@ -7,7 +7,7 @@ import os  # Added for securely loading environment variables
 
 # --- CONFIGURATION ---
 ALLOWED_ROLE_ID = 1517891459372683404
-LEADERBOARD_BANNER_URL = "https://cdn.discordapp.com/attachments/1518166886750097552/1518243857702191146/rsw_banner.webp?ex=6a393647&is=6a37e4c7&hm=0563c6c0945b66eafbe40e612fbea384b30a890d1b43c98b0be41d642883567d"
+LEADERBOARD_BANNER_URL = "https://media.discordapp.net/attachments/1463637945280889066/1502588316430897212/image.png?ex=6a37a0eb&is=6a364f6b&hm=232f0a35cb250c58de10af807b80f000265e7823695cc690be6951b8234e7fd1&=&format=webp&quality=lossless&width=717&height=420"
 # ---------------------
 
 # Database setup - Using /app/data/ path for Railway Persistent Volumes
@@ -81,7 +81,8 @@ def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embed:
             mention = user.mention if user else f"<@{uid}>"
                 
             if custom_name:
-                name_display = f"**{custom_name}** ({mention})"
+                # FIXED: Removed the brackets surrounding the user @mention
+                name_display = f"**{custom_name}** {mention}"
             else:
                 name_display = mention
 
@@ -190,7 +191,7 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
     
     c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, country, custom_name, user.id))
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
-    conn.commit()
+    conn.commit()  # Forces SQLite database file write immediately
     
     await interaction.followup.send(f"Moved {user.mention} to rank {position}. Grid shifted!", ephemeral=True)
     await update_live_leaderboard(interaction.guild)
@@ -320,7 +321,7 @@ async def stats(interaction: discord.Interaction, user: discord.Member = None):
     flag = get_flag_emoji(country)
 
     embed = discord.Embed(title="Ranked Tracker", color=discord.Color.blue())
-    display_title = f"{custom_name} ({target.mention})" if custom_name else target.mention
+    display_title = f"{custom_name} {target.mention}" if custom_name else target.mention
     embed.description = f"Stats for {flag}{display_title}"
     
     embed.add_field(name="Rank", value=str(rank) if rank > 0 else "Unranked", inline=True)
