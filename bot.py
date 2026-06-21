@@ -72,6 +72,7 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
         embed.description = "The leaderboard is currently empty."
     else:
         description = ""
+        total_rows = len(rows)
         for index, (uid, rank, streak, country, custom_name) in enumerate(rows):
             if index == 3:
                 description += "> ⸻⸻⸻⸻⸻\n"
@@ -101,6 +102,10 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
             flag = get_flag_emoji(country)
             streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
             description += f"> {medal}{flag}{name_display}{streak_tag}\n"
+            
+            # FIXED: Adds a subtle blockquote spacing break between items, except after the final entry
+            if index != total_rows - 1 and index != 2:
+                description += "> \n"
             
         embed.description = description
 
@@ -206,7 +211,6 @@ async def set_lb_position(
     
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     
-    # FIXED: Reconfigured update builders to strictly track clear incoming state variations (Optional/None definitions)
     query = 'UPDATE stats SET rank = ?'
     params = [position]
     
