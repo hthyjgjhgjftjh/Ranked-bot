@@ -3,8 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import sqlite3
 from datetime import datetime
-import os 
-from typing import Optional
+import os  # Added for securely loading environment variables
 
 # --- CONFIGURATION ---
 ALLOWED_ROLE_ID = 1517891459372683404
@@ -72,16 +71,13 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
         embed.description = "The leaderboard is currently empty."
     else:
         description = ""
-        total_rows = len(rows)
         for index, (uid, rank, streak, country, custom_name) in enumerate(rows):
-            if index == 3:
-                description += "> ⸻⸻⸻⸻⸻\n"
-
             if index == 0: medal = "🥇 "
             elif index == 1: medal = "🥈 "
             elif index == 2: medal = "🥉 "
             else: medal = f"**{rank}:** "
             
+            # Look up the user via cache or direct API call
             user = guild.get_member(uid)
             if not user:
                 try:
@@ -89,23 +85,17 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
                 except discord.HTTPException:
                     user = None
 
-            mention = f"<@{uid}>"
-
-            # Check if custom_name exists and is not just an empty string layout literal
-            if custom_name and str(custom_name).strip() != "":
-                name_display = f"**{str(custom_name).strip()}** {mention}"
+            # FIXED: Avoid raw pings inside description fields to bypass the Discord app ID rendering glitch.
+            if custom_name:
+                name_display = f"**{custom_name}**"
             elif user:
-                name_display = f"**{user.display_name}** {mention}"
+                name_display = f"**{user.display_name}**"
             else:
-                name_display = mention
+                name_display = f"**Unknown ({uid})**"
 
             flag = get_flag_emoji(country)
             streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
             description += f"> {medal}{flag}{name_display}{streak_tag}\n"
-            
-            # FIXED: Adds a subtle blockquote spacing break between items, except after the final entry
-            if index != total_rows - 1 and index != 2:
-                description += "> \n"
             
         embed.description = description
 
@@ -163,6 +153,7 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
         embed = await generate_leaderboard_embed(rows, interaction.guild)
         msg = await interaction.channel.send(embed=embed)
         
+        # Save this specific message to database config for live background tracking
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
         conn.commit()
@@ -188,13 +179,7 @@ bot.tree.add_command(LeaderboardGroup())
     country="Optional: 2-letter code (e.g. US, GB, FR) or an emoji flag",
     custom_name="Optional: The player's clean name to show beside their @mention"
 )
-async def set_lb_position(
-    interaction: discord.Interaction, 
-    user: discord.Member, 
-    position: int, 
-    country: Optional[str] = None, 
-    custom_name: Optional[str] = None
-):
+async def set_lb_position(interaction: discord.Interaction, user: discord.Member, position: int, country: str = "", custom_name: str = ""):
     if position < 1 or position > 16:
         await interaction.response.send_message("❌ Position must be between 1 and 16.", ephemeral=True)
         return
@@ -211,22 +196,9 @@ async def set_lb_position(
     
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     
-    query = 'UPDATE stats SET rank = ?'
-    params = [position]
-    
-    if country is not None:
-        query += ', country = ?'
-        params.append(country)
-    if custom_name is not None:
-        query += ', custom_name = ?'
-        params.append(custom_name)
-        
-    query += ' WHERE user_id = ?'
-    params.append(user.id)
-    
-    c.execute(query, tuple(params))
+    c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, country, custom_name, user.id))
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
-    conn.commit()
+    conn.commit()  # Forces SQLite database file write immediately
     
     await interaction.followup.send(f"Moved {user.mention} to rank {position}. Grid shifted!", ephemeral=False)
     await update_live_leaderboard(interaction.guild)
@@ -356,7 +328,7 @@ async def stats(interaction: discord.Interaction, user: discord.Member = None):
     flag = get_flag_emoji(country)
 
     embed = discord.Embed(title="Ranked Tracker", color=discord.Color.blue())
-    display_title = f"{custom_name} {target.mention}" if (custom_name and str(custom_name).strip() != "") else target.mention
+    display_title = f"{custom_name} {target.mention}" if custom_name else target.mention
     embed.description = f"Stats for {flag}{display_title}"
     
     embed.add_field(name="Rank", value=str(rank) if rank > 0 else "Unranked", inline=True)
