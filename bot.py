@@ -60,7 +60,7 @@ def get_flag_emoji(country_input: str) -> str:
 def get_current_timestamp() -> str:
     return f"Last Updated: {datetime.now().strftime('%Y-%m-%d %I:%M %p')} UTC"
 
-def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embed:
+async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embed:
     """Helper to cleanly build the leaderboard embed structure."""
     max_rank = max([row[1] for row in rows]) if rows else 16
     range_end = max(1, max_rank)
@@ -77,7 +77,14 @@ def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embed:
             elif index == 2: medal = "🥉 "
             else: medal = f"**{rank}:** "
             
+            # ATTEMPT CACHE FIRST, FALLBACK TO API IF NOT FOUND
             user = guild.get_member(uid)
+            if not user:
+                try:
+                    user = await bot.fetch_user(uid)
+                except discord.HTTPException:
+                    user = None
+
             mention = user.mention if user else f"<@{uid}>"
                 
             if custom_name:
@@ -116,7 +123,7 @@ async def update_live_leaderboard(guild: discord.Guild):
     c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
     rows = c.fetchall()
     
-    embed = generate_leaderboard_embed(rows, guild)
+    embed = await generate_leaderboard_embed(rows, guild)
 
     c.execute('SELECT value_id FROM config WHERE key = "channel_id"')
     channel_row = c.fetchone()
@@ -143,7 +150,7 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
-        embed = generate_leaderboard_embed(rows, interaction.guild)
+        embed = await generate_leaderboard_embed(rows, interaction.guild)
         msg = await interaction.channel.send(embed=embed)
         
         # Save this specific message to database config for live background tracking
@@ -161,7 +168,7 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
-        embed = generate_leaderboard_embed(rows, interaction.guild)
+        embed = await generate_leaderboard_embed(rows, interaction.guild)
         await interaction.followup.send(embed=embed)
 
 bot.tree.add_command(LeaderboardGroup())
