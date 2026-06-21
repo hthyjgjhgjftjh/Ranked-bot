@@ -6,10 +6,9 @@ from datetime import datetime
 import os  # Added for securely loading environment variables
 
 # --- CONFIGURATION ---
-ALLOWED_ROLE_ID = 1517891459372683404
-
 ALLOWED_ROLE_ID = 1517852942122614844
-LEADERBOARD_BANNER_URL = "https://media.discordapp.net/attachments/1463637945280889066/1502588316430897212/image.png?ex=6a38f26b&is=6a37a0eb&hm=85dfdefedc6d7a3f1574e56a8484f389cc1b0bc1450a63589500f009b8eb637c&=&format=webp&quality=lossless&width=717&height=420"
+# Cleaned up URL parameters to ensure Discord renders the image correctly
+LEADERBOARD_BANNER_URL = "https://media.discordapp.net/attachments/1463637945280889066/1502588316430897212/image.png"
 # ---------------------
 
 # Database setup - Using /app/data/ path for Railway Persistent Volumes
@@ -114,6 +113,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 # --- LIVE REFRESH HELPER ---
 async def update_live_leaderboard(guild: discord.Guild):
     """Fetches data and automatically updates the active live tracking message."""
+    # Ensure fresh read from DB
     c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
     rows = c.fetchall()
     
@@ -130,8 +130,8 @@ async def update_live_leaderboard(guild: discord.Guild):
             try:
                 message = await channel.fetch_message(message_row[0])
                 await message.edit(embed=embed)
-            except discord.NotFound:
-                pass
+            except (discord.NotFound, discord.Forbidden):
+                print("Failed to update live leaderboard: Message or permissions missing.")
 
 # --- LEADERBOARD GROUP COMMANDS ---
 class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Leaderboard configurations"):
@@ -156,7 +156,6 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
 
     @app_commands.command(name="view", description="Check the current leaderboard standings instantly")
     async def view(self, interaction: discord.Interaction):
-        # Accessible to everyone, doesn't mess up live tracking configurations
         await interaction.response.defer(ephemeral=False)
         
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
@@ -181,16 +180,24 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
 
     await interaction.response.defer(ephemeral=True)
 
+    # 1. Clear old placement if they already had a ranking assignment
     c.execute('SELECT rank FROM stats WHERE user_id = ?', (user.id,))
     existing_row = c.fetchone()
     if existing_row and existing_row[0] > 0:
+        old_rank = existing_row[0]
         c.execute('UPDATE stats SET rank = 0 WHERE user_id = ?', (user.id,))
-        c.execute('UPDATE stats SET rank = rank - 1 WHERE rank > ?', (existing_row[0],))
+        c.execute('UPDATE stats SET rank = rank - 1 WHERE rank > ?', (old_rank,))
 
+    # 2. Shift others down to create room
     c.execute('UPDATE stats SET rank = rank + 1 WHERE rank >= ?', (position,))
+    
+    # 3. Inject baseline row profile if it didn't exist yet
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     
+    # 4. Bind user into new assigned spot
     c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, country, custom_name, user.id))
+    
+    # 5. Kick off anyone pushed past slot 16
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
     conn.commit()
     
