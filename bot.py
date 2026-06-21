@@ -7,7 +7,7 @@ import os  # Added for securely loading environment variables
 
 # --- CONFIGURATION ---
 ALLOWED_ROLE_ID = 1517891459372683404
-LEADERBOARD_BANNER_URL = "https://media.discordapp.net/attachments/1463637945280889066/1502588316430897212/image.png?ex=6a37a0eb&is=6a364f6b&hm=232f0a35cb250c58de10af807b80f000265e7823695cc690be6951b8234e7fd1&=&format=webp&quality=lossless&width=717&height=420"
+LEADERBOARD_BANNER_URL = "https://cdn.discordapp.com/attachments/1518166886750097552/1518243857702191146/rsw_banner.webp?ex=6a393647&is=6a37e4c7&hm=0563c6c0945b66eafbe40e612fbea384b30a890d1b43c98b0be41d642883567d"
 # ---------------------
 
 # Database setup - Using /app/data/ path for Railway Persistent Volumes
