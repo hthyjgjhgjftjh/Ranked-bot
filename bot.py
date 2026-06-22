@@ -3,22 +3,20 @@ from discord import app_commands
 from discord.ext import commands
 import sqlite3
 from datetime import datetime
-import os  # Added for securely loading environment variables
+import os
 
 # --- CONFIGURATION ---
 ALLOWED_ROLE_ID = 1517891459372683404
 LEADERBOARD_BANNER_URL = "https://cdn.discordapp.com/attachments/1518166886750097552/1518245653443248188/rsw_banner.webp?ex=6a3937f3&is=6a37e673&hm=36209fea2c1640b27af2e81f94d27cb57290b574c75b7f130dadd17dc5b72dda"
 # ---------------------
 
-# Database setup - Using /app/data/ path for Railway Persistent Volumes
+# Database setup
 db_path = '/app/data/stats.db' if os.path.exists('/app/data') else 'stats.db'
 conn = sqlite3.connect(db_path)
 c = conn.cursor()
 
-# Create baseline stats table
 c.execute('CREATE TABLE IF NOT EXISTS stats (user_id INTEGER PRIMARY KEY, wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0)')
 
-# Upgrade database schema tracking columns dynamically if needed
 columns = [col[1] for col in c.execute("PRAGMA table_info(stats)").fetchall()]
 if "rank" not in columns:
     c.execute('ALTER TABLE stats ADD COLUMN rank INTEGER DEFAULT 0')
@@ -32,7 +30,6 @@ if "custom_name" not in columns:
     c.execute('ALTER TABLE stats ADD COLUMN custom_name TEXT DEFAULT ""')
 conn.commit()
 
-# Config table for managing live leaderboard messages
 c.execute('CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value_id INTEGER)')
 conn.commit()
 
@@ -43,25 +40,20 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- UTILITY HELPER ---
 def get_flag_emoji(country_input: str) -> str:
-    """Converts a 2-letter country code (e.g. 'us', 'gb') into a regional indicator emoji string."""
     if not country_input:
         return ""
-    
     if len(country_input) > 4 or ord(country_input[0]) > 127:
         return f"{country_input} "
-        
     code = country_input.strip().upper()
     if len(code) == 2 and code.isalpha():
         emoji = chr(127462 + ord(code[0]) - 65) + chr(127462 + ord(code[1]) - 65)
         return f"{emoji} "
-    
     return ""
 
 def get_current_timestamp() -> str:
     return f"Last Updated: {datetime.now().strftime('%Y-%m-%d %I:%M %p')} UTC"
 
 async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embed:
-    """Helper to cleanly build the leaderboard embed structure."""
     max_rank = max([row[1] for row in rows]) if rows else 16
     range_end = max(1, max_rank)
     
@@ -77,7 +69,6 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
             elif index == 2: medal = "🥉 "
             else: medal = f"**{rank}:** "
 
-            # Fetch user info for accurate fallback display names
             user = guild.get_member(uid)
             if not user:
                 try:
@@ -85,9 +76,9 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
                 except discord.HTTPException:
                     user = None
 
-            # FIXED: Always generates Custom Text Name AND the Blue Mention block side-by-side
-            if custom_name:
-                display_name = custom_name
+            # Strictly renders Custom Name OR falls back to Display Name, followed by the Mention Ping
+            if custom_name and custom_name.strip():
+                display_name = custom_name.strip()
             elif user:
                 display_name = user.display_name
             else:
@@ -96,6 +87,7 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
             name_display = f"**{display_name}** <@{uid}>"
             flag = get_flag_emoji(country)
             streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
+            
             description += f"> {medal}{flag}{name_display}{streak_tag}\n"
             
         embed.description = description
@@ -118,9 +110,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     else:
         raise error
 
-# --- LIVE REFRESH HELPER ---
 async def update_live_leaderboard(guild: discord.Guild):
-    """Fetches data and automatically updates the active live tracking message."""
     c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
     rows = c.fetchall()
     
@@ -162,7 +152,6 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
             except (discord.NotFound, discord.Forbidden):
                 pass
 
-        # Gathers a complete clone of all active positions, custom names, and streaks
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
@@ -187,42 +176,74 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
 
 bot.tree.add_command(LeaderboardGroup())
 
-# --- RANK POSITION COMMANDS ---
+# --- PROFILE & RANK POSITION COMMANDS ---
+@bot.tree.command(name="set_profile", description="Set a player's country flag and custom name safely")
+@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+@app_commands.describe(
+    country="Optional: 2-letter code (e.g. US, GB, FR) or an emoji flag",
+    custom_name="Optional: The player's clean custom name"
+)
+async def set_profile(interaction: discord.Interaction, user: discord.Member, country: str = None, custom_name: str = None):
+    # This specifically solves the issue by letting you cleanly set their name without modifying ranks
+    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
+    
+    updates = []
+    params = []
+    
+    if country is not None:
+        updates.append("country = ?")
+        params.append(country)
+    if custom_name is not None:
+        updates.append("custom_name = ?")
+        params.append(custom_name)
+        
+    if not updates:
+        await interaction.response.send_message("❌ You must provide at least a country or custom name to update.", ephemeral=True)
+        return
+        
+    params.append(user.id)
+    c.execute(f"UPDATE stats SET {', '.join(updates)} WHERE user_id = ?", tuple(params))
+    conn.commit()
+    
+    await interaction.response.send_message(f"✅ Successfully updated profile text for {user.mention}!", ephemeral=False)
+    await update_live_leaderboard(interaction.guild)
+
 @bot.tree.command(name="set_lb_position", description="Add/Move user to a specific leaderboard position")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 @app_commands.describe(
     country="Optional: 2-letter code (e.g. US, GB, FR) or an emoji flag",
     custom_name="Optional: The player's clean name to show beside their @mention"
 )
-async def set_lb_position(interaction: discord.Interaction, user: discord.Member, position: int, country: str = "", custom_name: str = ""):
+async def set_lb_position(interaction: discord.Interaction, user: discord.Member, position: int, country: str = None, custom_name: str = None):
     if position < 1 or position > 16:
         await interaction.response.send_message("❌ Position must be between 1 and 16.", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=False)
 
-    # FIXED: Check user's current record first to preserve custom_name and country if left blank during updates
-    c.execute('SELECT country, custom_name FROM stats WHERE user_id = ?', (user.id,))
-    existing_profile = c.fetchone()
-    
-    # Keep historical values if the optional fields weren't filled out this time
-    final_country = country if country else (existing_profile[0] if existing_profile else "")
-    final_custom_name = custom_name if custom_name else (existing_profile[1] if existing_profile else "")
-
-    c.execute('SELECT rank FROM stats WHERE user_id = ?', (user.id,))
-    existing_row = c.fetchone()
-    if existing_row and existing_row[0] > 0:
-        c.execute('UPDATE stats SET rank = 0 WHERE user_id = ?', (user.id,))
-        c.execute('UPDATE stats SET rank = rank - 1 WHERE rank > ?', (existing_row[0],))
-
-    # Safely shifts other players' positions while maintaining their profile information intact
-    c.execute('UPDATE stats SET rank = rank + 1 WHERE rank >= ?', (position,))
-    
+    # FIXED: Insert baseline instantly so we can extract reliable values
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
+    
+    c.execute('SELECT country, custom_name, rank FROM stats WHERE user_id = ?', (user.id,))
+    existing_row = c.fetchone()
+    
+    current_country = existing_row[0]
+    current_custom_name = existing_row[1]
+    current_rank = existing_row[2]
+
+    # STRCIT NONE CHECK: Impossible for a blank Discord text box to accidentally delete custom_names anymore
+    final_country = country if country is not None else current_country
+    final_custom_name = custom_name if custom_name is not None else current_custom_name
+
+    if current_rank > 0:
+        c.execute('UPDATE stats SET rank = 0 WHERE user_id = ?', (user.id,))
+        c.execute('UPDATE stats SET rank = rank - 1 WHERE rank > ?', (current_rank,))
+
+    c.execute('UPDATE stats SET rank = rank + 1 WHERE rank >= ?', (position,))
     
     c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, final_country, final_custom_name, user.id))
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
-    conn.commit()
+    conn.commit() 
     
     await interaction.followup.send(f"Moved {user.mention} to rank {position}. Grid shifted!", ephemeral=False)
     await update_live_leaderboard(interaction.guild)
@@ -278,7 +299,7 @@ async def set_streak(interaction: discord.Interaction, user: discord.Member, amo
     c.execute('UPDATE stats SET streak = ? WHERE user_id = ?', (amount, user.id))
     conn.commit()
     
-    await interaction.followup.send(f"Set {user.mention}'s win streak to {amount}x 🔥!")
+    await interaction.response.send_message(f"Set {user.mention}'s win streak to {amount}x 🔥!")
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="add_win", description="Give a user a win")
