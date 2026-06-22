@@ -77,7 +77,7 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
             elif index == 2: medal = "🥉 "
             else: medal = f"**{rank}:** "
             
-            # Look up the user via cache or direct API call
+            # 1. ALWAYS look up the user via cache or direct API call first
             user = guild.get_member(uid)
             if not user:
                 try:
@@ -85,13 +85,17 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
                 except discord.HTTPException:
                     user = None
 
-            # FIXED: Avoid raw pings inside description fields to bypass the Discord app ID rendering glitch.
-            if custom_name:
-                name_display = f"**{custom_name}**"
-            elif user:
-                name_display = f"**{user.display_name}**"
+            # 2. Get their base Discord display name
+            if user:
+                base_name = user.display_name
             else:
-                name_display = f"**Unknown ({uid})**"
+                base_name = f"Unknown ({uid})"
+
+            # 3. FIX: Combine custom name styles and regular profile names side-by-side
+            if custom_name:
+                name_display = f"**{custom_name}** | **{base_name}**"
+            else:
+                name_display = f"**{base_name}**"
 
             flag = get_flag_emoji(country)
             streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
