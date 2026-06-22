@@ -76,26 +76,14 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
             elif index == 1: medal = "🥈 "
             elif index == 2: medal = "🥉 "
             else: medal = f"**{rank}:** "
+
+            mention_display = f"<@{uid}>"
             
-            # 1. ALWAYS look up the user via cache or direct API call first
-            user = guild.get_member(uid)
-            if not user:
-                try:
-                    user = await bot.fetch_user(uid)
-                except discord.HTTPException:
-                    user = None
-
-            # 2. Get their base Discord display name
-            if user:
-                base_name = user.display_name
-            else:
-                base_name = f"Unknown ({uid})"
-
-            # 3. FIX: Combine custom name styles and regular profile names side-by-side
+            # FIXED: Always renders Custom Name AND @mention next to each other dynamically
             if custom_name:
-                name_display = f"**{custom_name}** | **{base_name}**"
+                name_display = f"**{custom_name}** ({mention_display})"
             else:
-                name_display = f"**{base_name}**"
+                name_display = mention_display
 
             flag = get_flag_emoji(country)
             streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
@@ -151,6 +139,26 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
     async def setup(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
+        # Grab existing saved IDs from database
+        c.execute('SELECT value_id FROM config WHERE key = "channel_id"')
+        channel_row = c.fetchone()
+        c.execute('SELECT value_id FROM config WHERE key = "message_id"')
+        message_row = c.fetchone()
+
+        if channel_row and message_row:
+            try:
+                # fetch_channel forces an API request to guarantee an accurate status check
+                existing_channel = await bot.fetch_channel(channel_row[0])
+                await existing_channel.fetch_message(message_row[0])
+                
+                # If no errors were thrown above, the leaderboard exists and is fully active
+                await interaction.followup.send(f"❌ There is already an active leaderboard set up in {existing_channel.mention}!", ephemeral=True)
+                return
+            except (discord.NotFound, discord.Forbidden):
+                # If the channel/message was hard-deleted or is unreachable, bypass restriction and allow setup
+                pass
+
+        # FIXED: Pulls ALL active players (with their ranks, custom names, flags, and streaks intact) to generate a complete visual copy
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
@@ -258,7 +266,7 @@ async def set_streak(interaction: discord.Interaction, user: discord.Member, amo
     c.execute('UPDATE stats SET streak = ? WHERE user_id = ?', (amount, user.id))
     conn.commit()
     
-    await interaction.response.send_message(f"Set {user.mention}'s win streak to {amount}x 🔥!")
+    await interaction.followup.send(f"Set {user.mention}'s win streak to {amount}x 🔥!")
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="add_win", description="Give a user a win")
@@ -312,14 +320,16 @@ async def remove_tie(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(f"Removed a tie from {user.mention}!")
     await update_live_leaderboard(interaction.guild)
 
+# --- TRACKER STATS COMMAND ---
 @bot.tree.command(name="stats", description="Check stats")
 async def stats(interaction: discord.Interaction, user: discord.Member = None):
     target = user or interaction.user
     c.execute('SELECT wins, losses, rank, streak, country, ties, custom_name FROM stats WHERE user_id = ?', (target.id,))
     row = c.fetchone()
     
-    if not row:
-        await interaction.response.send_message("No stats found for this user.")
+    # Check if the user has no recorded row or if their record contains completely zeroed stats
+    if not row or (row[0] == 0 and row[1] == 0 and row[5] == 0 and row[2] == 0):
+        await interaction.response.send_message(f"No stats found for @{target.display_name}.", ephemeral=False)
         return
         
     wins, losses, rank, streak, country, ties, custom_name = row
