@@ -77,14 +77,23 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
             elif index == 2: medal = "🥉 "
             else: medal = f"**{rank}:** "
 
-            mention_display = f"<@{uid}>"
-            
-            # FIXED: Always renders Custom Name AND @mention next to each other dynamically
-            if custom_name:
-                name_display = f"**{custom_name}** ({mention_display})"
-            else:
-                name_display = mention_display
+            # Fetch user info for accurate fallback display names
+            user = guild.get_member(uid)
+            if not user:
+                try:
+                    user = await bot.fetch_user(uid)
+                except discord.HTTPException:
+                    user = None
 
+            # FIXED: Always generates Custom Text Name AND the Blue Mention block side-by-side
+            if custom_name:
+                display_name = custom_name
+            elif user:
+                display_name = user.display_name
+            else:
+                display_name = f"User {uid}"
+
+            name_display = f"**{display_name}** <@{uid}>"
             flag = get_flag_emoji(country)
             streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
             description += f"> {medal}{flag}{name_display}{streak_tag}\n"
@@ -139,7 +148,6 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
     async def setup(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Grab existing saved IDs from database
         c.execute('SELECT value_id FROM config WHERE key = "channel_id"')
         channel_row = c.fetchone()
         c.execute('SELECT value_id FROM config WHERE key = "message_id"')
@@ -147,25 +155,20 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
 
         if channel_row and message_row:
             try:
-                # fetch_channel forces an API request to guarantee an accurate status check
                 existing_channel = await bot.fetch_channel(channel_row[0])
                 await existing_channel.fetch_message(message_row[0])
-                
-                # If no errors were thrown above, the leaderboard exists and is fully active
                 await interaction.followup.send(f"❌ There is already an active leaderboard set up in {existing_channel.mention}!", ephemeral=True)
                 return
             except (discord.NotFound, discord.Forbidden):
-                # If the channel/message was hard-deleted or is unreachable, bypass restriction and allow setup
                 pass
 
-        # FIXED: Pulls ALL active players (with their ranks, custom names, flags, and streaks intact) to generate a complete visual copy
+        # Gathers a complete clone of all active positions, custom names, and streaks
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
         embed = await generate_leaderboard_embed(rows, interaction.guild)
         msg = await interaction.channel.send(embed=embed)
         
-        # Save this specific message to database config for live background tracking
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
         conn.commit()
@@ -198,19 +201,28 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
 
     await interaction.response.defer(ephemeral=False)
 
+    # FIXED: Check user's current record first to preserve custom_name and country if left blank during updates
+    c.execute('SELECT country, custom_name FROM stats WHERE user_id = ?', (user.id,))
+    existing_profile = c.fetchone()
+    
+    # Keep historical values if the optional fields weren't filled out this time
+    final_country = country if country else (existing_profile[0] if existing_profile else "")
+    final_custom_name = custom_name if custom_name else (existing_profile[1] if existing_profile else "")
+
     c.execute('SELECT rank FROM stats WHERE user_id = ?', (user.id,))
     existing_row = c.fetchone()
     if existing_row and existing_row[0] > 0:
         c.execute('UPDATE stats SET rank = 0 WHERE user_id = ?', (user.id,))
         c.execute('UPDATE stats SET rank = rank - 1 WHERE rank > ?', (existing_row[0],))
 
+    # Safely shifts other players' positions while maintaining their profile information intact
     c.execute('UPDATE stats SET rank = rank + 1 WHERE rank >= ?', (position,))
     
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     
-    c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, country, custom_name, user.id))
+    c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, final_country, final_custom_name, user.id))
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
-    conn.commit()  # Forces SQLite database file write immediately
+    conn.commit()
     
     await interaction.followup.send(f"Moved {user.mention} to rank {position}. Grid shifted!", ephemeral=False)
     await update_live_leaderboard(interaction.guild)
@@ -327,7 +339,6 @@ async def stats(interaction: discord.Interaction, user: discord.Member = None):
     c.execute('SELECT wins, losses, rank, streak, country, ties, custom_name FROM stats WHERE user_id = ?', (target.id,))
     row = c.fetchone()
     
-    # Check if the user has no recorded row or if their record contains completely zeroed stats
     if not row or (row[0] == 0 and row[1] == 0 and row[5] == 0 and row[2] == 0):
         await interaction.response.send_message(f"No stats found for @{target.display_name}.", ephemeral=False)
         return
