@@ -128,6 +128,7 @@ async def update_live_leaderboard(guild: discord.Guild):
                 message = await channel.fetch_message(message_row[0])
                 await message.edit(embed=embed)
             except discord.NotFound:
+                # Message was deleted, fail silently. Setup needs to be run again.
                 pass
 
 # --- LEADERBOARD GROUP COMMANDS ---
@@ -143,14 +144,18 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
         c.execute('SELECT value_id FROM config WHERE key = "message_id"')
         message_row = c.fetchone()
 
+        # ONE LEADERBOARD CHECK: See if we already have an active tracking message
         if channel_row and message_row:
-            try:
-                existing_channel = await bot.fetch_channel(channel_row[0])
-                await existing_channel.fetch_message(message_row[0])
-                await interaction.followup.send(f"❌ There is already an active leaderboard set up in {existing_channel.mention}!", ephemeral=True)
-                return
-            except (discord.NotFound, discord.Forbidden):
-                pass
+            existing_channel = interaction.guild.get_channel(channel_row[0])
+            if existing_channel:
+                try:
+                    msg = await existing_channel.fetch_message(message_row[0])
+                    # If the message exists, block the command
+                    await interaction.followup.send(f"❌ There is already an active leaderboard set up in {existing_channel.mention}!\nJump to it: {msg.jump_url}", ephemeral=True)
+                    return
+                except discord.NotFound:
+                    # The message was deleted by a user, we can safely proceed and make a new one
+                    pass
 
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
@@ -162,7 +167,7 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
         conn.commit()
         
-        await interaction.followup.send("✅ Live tracking leaderboard spawned and configured successfully!", ephemeral=True)
+        await interaction.followup.send("✅ Live tracking leaderboard spawned! All updates will push here.", ephemeral=True)
 
     @app_commands.command(name="view", description="Check the current leaderboard standings instantly")
     async def view(self, interaction: discord.Interaction):
@@ -184,7 +189,6 @@ bot.tree.add_command(LeaderboardGroup())
     custom_name="Optional: The player's clean custom name"
 )
 async def set_profile(interaction: discord.Interaction, user: discord.Member, country: str = None, custom_name: str = None):
-    # This specifically solves the issue by letting you cleanly set their name without modifying ranks
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     
     updates = []
@@ -221,7 +225,6 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
 
     await interaction.response.defer(ephemeral=False)
 
-    # FIXED: Insert baseline instantly so we can extract reliable values
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     
     c.execute('SELECT country, custom_name, rank FROM stats WHERE user_id = ?', (user.id,))
@@ -231,7 +234,6 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
     current_custom_name = existing_row[1]
     current_rank = existing_row[2]
 
-    # STRCIT NONE CHECK: Impossible for a blank Discord text box to accidentally delete custom_names anymore
     final_country = country if country is not None else current_country
     final_custom_name = custom_name if custom_name is not None else current_custom_name
 
