@@ -147,25 +147,6 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
     async def setup(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Grab existing saved IDs from database
-        c.execute('SELECT value_id FROM config WHERE key = "channel_id"')
-        channel_row = c.fetchone()
-        c.execute('SELECT value_id FROM config WHERE key = "message_id"')
-        message_row = c.fetchone()
-
-        if channel_row and message_row:
-            try:
-                # FIXED: fetch_channel forces an API request to guarantee an accurate status check
-                existing_channel = await bot.fetch_channel(channel_row[0])
-                await existing_channel.fetch_message(message_row[0])
-                
-                # If no errors were thrown above, the leaderboard exists and is fully active
-                await interaction.followup.send(f"❌ There is already an active leaderboard set up in {existing_channel.mention}!", ephemeral=True)
-                return
-            except (discord.NotFound, discord.Forbidden):
-                # If the channel/message was hard-deleted or is unreachable, bypass restriction and allow setup
-                pass
-
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
@@ -327,16 +308,14 @@ async def remove_tie(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(f"Removed a tie from {user.mention}!")
     await update_live_leaderboard(interaction.guild)
 
-# --- TRACKER STATS COMMAND ---
 @bot.tree.command(name="stats", description="Check stats")
 async def stats(interaction: discord.Interaction, user: discord.Member = None):
     target = user or interaction.user
     c.execute('SELECT wins, losses, rank, streak, country, ties, custom_name FROM stats WHERE user_id = ?', (target.id,))
     row = c.fetchone()
     
-    # Check if the user has no recorded row or if their record contains completely zeroed stats
-    if not row or (row[0] == 0 and row[1] == 0 and row[5] == 0 and row[2] == 0):
-        await interaction.response.send_message(f"No stats found for @{target.display_name}.", ephemeral=False)
+    if not row:
+        await interaction.response.send_message("No stats found for this user.")
         return
         
     wins, losses, rank, streak, country, ties, custom_name = row
