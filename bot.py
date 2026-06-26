@@ -148,17 +148,36 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
     async def setup(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # STRICT CHECK: Deny creation if a tracking reference already exists
+        # Look up what the database thinks is the active leaderboard
+        c.execute('SELECT value_id FROM config WHERE key = "channel_id"')
+        chan_row = c.fetchone()
         c.execute('SELECT value_id FROM config WHERE key = "message_id"')
-        existing_board = c.fetchone()
+        msg_row = c.fetchone()
         
-        if existing_board:
-            await interaction.followup.send(
-                "❌ **Setup Denied:** An active live leaderboard already exists on this server.\n"
-                "You cannot spawn multiple concurrent tracking modules. Please delete or locate your active tracking block.", 
-                ephemeral=True
-            )
-            return
+        if chan_row and msg_row:
+            channel = interaction.guild.get_channel(chan_row[0])
+            if channel:
+                try:
+                    # Verify if the message still actually exists inside the Discord server
+                    await channel.fetch_message(msg_row[0])
+                    
+                    # Message is alive and well. Stop the action.
+                    await interaction.followup.send(
+                        f"❌ **Setup Denied:** You already have an active live leaderboard running in {channel.mention}.\n"
+                        f"To create a new one, you must physically delete that message first.", 
+                        ephemeral=True
+                    )
+                    return
+                except discord.NotFound:
+                    # Message was deleted manually by a user, clear the config so a new one can be created
+                    c.execute('DELETE FROM config WHERE key = "message_id"')
+                    c.execute('DELETE FROM config WHERE key = "channel_id"')
+                    conn.commit()
+            else:
+                # Channel itself was wiped out. Clean database tracking.
+                c.execute('DELETE FROM config WHERE key = "message_id"')
+                c.execute('DELETE FROM config WHERE key = "channel_id"')
+                conn.commit()
 
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
