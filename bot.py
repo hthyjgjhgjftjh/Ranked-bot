@@ -158,7 +158,7 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
             channel = interaction.guild.get_channel(chan_row[0])
             if channel:
                 try:
-                    # Verify if the message still actually exists inside the Discord server
+                    # Try to see if the message actually exists inside the Discord server
                     await channel.fetch_message(msg_row[0])
                     
                     # Message is alive and well. Stop the action.
@@ -168,8 +168,8 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
                         ephemeral=True
                     )
                     return
-                except discord.NotFound:
-                    # Message was deleted manually by a user, clear the config so a new one can be created
+                except Exception:
+                    # Catch-all fallback: If we fail to find or load the message, it's safe to clear out old data!
                     c.execute('DELETE FROM config WHERE key = "message_id"')
                     c.execute('DELETE FROM config WHERE key = "channel_id"')
                     conn.commit()
@@ -229,7 +229,13 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
     conn.commit()
     
-    await interaction.followup.send(f"Moved {user.mention} to rank {position}. Grid shifted!", ephemeral=False)
+    # Modified: Explicitly structures the message to show "Custom Name ( @Mention )" inside the message response
+    if custom_name:
+        display_str = f"**{custom_name}** ({user.mention})"
+    else:
+        display_str = user.mention
+
+    await interaction.followup.send(f"Moved {display_str} to rank {position}. Grid shifted!", ephemeral=False)
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_lb_position", description="Remove a user from the leaderboard entirely")
