@@ -147,28 +147,37 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
     async def setup(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
+        # Check if a leaderboard already exists and is valid
+        c.execute('SELECT value_id FROM config WHERE key = "channel_id"')
+        channel_row = c.fetchone()
+        c.execute('SELECT value_id FROM config WHERE key = "message_id"')
+        message_row = c.fetchone()
+
+        if channel_row and message_row:
+            channel = interaction.guild.get_channel(channel_row[0])
+            if channel:
+                try:
+                    # Attempt to fetch the message to see if it's still alive in Discord
+                    await channel.fetch_message(message_row[0])
+                    await interaction.followup.send("❌ A leaderboard is already setup and active! You cannot create another one.", ephemeral=True)
+                    return
+                except discord.NotFound:
+                    # Message was deleted, so we can allow setting up a new one
+                    pass
+
+        # Query completely fresh data from the database right now
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
         embed = await generate_leaderboard_embed(rows, interaction.guild)
         msg = await interaction.channel.send(embed=embed)
         
-        # Save this specific message to database config for live background tracking
+        # Save this brand new setup data cleanly back to config
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
         conn.commit()
         
-        await interaction.followup.send("✅ Live tracking leaderboard spawned and configured successfully!", ephemeral=True)
-
-    @app_commands.command(name="view", description="Check the current leaderboard standings instantly")
-    async def view(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=False)
-        
-        c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
-        rows = c.fetchall()
-        
-        embed = await generate_leaderboard_embed(rows, interaction.guild)
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send("✅ Live tracking leaderboard spawned with the latest data and configured successfully!", ephemeral=True)
 
 bot.tree.add_command(LeaderboardGroup())
 
