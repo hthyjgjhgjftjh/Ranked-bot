@@ -147,37 +147,28 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
     async def setup(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Check if a leaderboard already exists and is valid
-        c.execute('SELECT value_id FROM config WHERE key = "channel_id"')
-        channel_row = c.fetchone()
-        c.execute('SELECT value_id FROM config WHERE key = "message_id"')
-        message_row = c.fetchone()
-
-        if channel_row and message_row:
-            channel = interaction.guild.get_channel(channel_row[0])
-            if channel:
-                try:
-                    # Attempt to fetch the message to see if it's still alive in Discord
-                    await channel.fetch_message(message_row[0])
-                    await interaction.followup.send("❌ A leaderboard is already setup and active! You cannot create another one.", ephemeral=True)
-                    return
-                except discord.NotFound:
-                    # Message was deleted, so we can allow setting up a new one
-                    pass
-
-        # Query completely fresh data from the database right now
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
         embed = await generate_leaderboard_embed(rows, interaction.guild)
         msg = await interaction.channel.send(embed=embed)
         
-        # Save this brand new setup data cleanly back to config
+        # Save this specific message to database config for live background tracking
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
         conn.commit()
         
-        await interaction.followup.send("✅ Live tracking leaderboard spawned with the latest data and configured successfully!", ephemeral=True)
+        await interaction.followup.send("✅ Live tracking leaderboard spawned and configured successfully!", ephemeral=True)
+
+    @app_commands.command(name="view", description="Check the current leaderboard standings instantly")
+    async def view(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+        
+        c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
+        rows = c.fetchall()
+        
+        embed = await generate_leaderboard_embed(rows, interaction.guild)
+        await interaction.followup.send(embed=embed)
 
 bot.tree.add_command(LeaderboardGroup())
 
@@ -266,13 +257,26 @@ async def set_streak(interaction: discord.Interaction, user: discord.Member, amo
     await interaction.response.send_message(f"Set {user.mention}'s win streak to {amount}x 🔥!")
     await update_live_leaderboard(interaction.guild)
 
-@bot.tree.command(name="add_win", description="Give a user a win")
+@bot.tree.command(name="add_win", description="Give a user a win (+1)")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 async def add_win(interaction: discord.Interaction, user: discord.Member):
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET wins = wins + 1, streak = streak + 1 WHERE user_id = ?', (user.id,))
     conn.commit()
     await interaction.response.send_message(f"Added a win to {user.mention}!")
+    await update_live_leaderboard(interaction.guild)
+
+@bot.tree.command(name="set_wins", description="Manually override a user's total wins balance")
+@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+async def set_wins(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if amount < 0:
+        await interaction.response.send_message("❌ Win balance cannot be negative.", ephemeral=True)
+        return
+        
+    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
+    c.execute('UPDATE stats SET wins = ? WHERE user_id = ?', (amount, user.id))
+    conn.commit()
+    await interaction.response.send_message(f"Set {user.mention}'s total wins to **{amount}**!")
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_win", description="Remove a win")
@@ -283,13 +287,26 @@ async def remove_win(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(f"Removed a win from {user.mention}!")
     await update_live_leaderboard(interaction.guild)
 
-@bot.tree.command(name="add_loss", description="Give a user a loss")
+@bot.tree.command(name="add_loss", description="Give a user a loss (+1)")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 async def add_loss(interaction: discord.Interaction, user: discord.Member):
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET losses = losses + 1, streak = 0 WHERE user_id = ?', (user.id,))
     conn.commit()
     await interaction.response.send_message(f"Added a loss to {user.mention}. Streak broken!")
+    await update_live_leaderboard(interaction.guild)
+
+@bot.tree.command(name="set_losses", description="Manually override a user's total losses balance")
+@app_commands.checks.has_role(ALLOWED_ROLE_ID)
+async def set_losses(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if amount < 0:
+        await interaction.response.send_message("❌ Loss balance cannot be negative.", ephemeral=True)
+        return
+        
+    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
+    c.execute('UPDATE stats SET losses = ? WHERE user_id = ?', (amount, user.id))
+    conn.commit()
+    await interaction.response.send_message(f"Set {user.mention}'s total losses to **{amount}**!")
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_loss", description="Remove a loss")
