@@ -257,26 +257,13 @@ async def set_streak(interaction: discord.Interaction, user: discord.Member, amo
     await interaction.response.send_message(f"Set {user.mention}'s win streak to {amount}x 🔥!")
     await update_live_leaderboard(interaction.guild)
 
-@bot.tree.command(name="add_win", description="Give a user a win (+1)")
+@bot.tree.command(name="add_win", description="Give a user a win")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 async def add_win(interaction: discord.Interaction, user: discord.Member):
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET wins = wins + 1, streak = streak + 1 WHERE user_id = ?', (user.id,))
     conn.commit()
     await interaction.response.send_message(f"Added a win to {user.mention}!")
-    await update_live_leaderboard(interaction.guild)
-
-@bot.tree.command(name="set_wins", description="Manually override a user's total wins balance")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
-async def set_wins(interaction: discord.Interaction, user: discord.Member, amount: int):
-    if amount < 0:
-        await interaction.response.send_message("❌ Win balance cannot be negative.", ephemeral=True)
-        return
-        
-    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
-    c.execute('UPDATE stats SET wins = ? WHERE user_id = ?', (amount, user.id))
-    conn.commit()
-    await interaction.response.send_message(f"Set {user.mention}'s total wins to **{amount}**!")
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_win", description="Remove a win")
@@ -287,26 +274,13 @@ async def remove_win(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(f"Removed a win from {user.mention}!")
     await update_live_leaderboard(interaction.guild)
 
-@bot.tree.command(name="add_loss", description="Give a user a loss (+1)")
+@bot.tree.command(name="add_loss", description="Give a user a loss")
 @app_commands.checks.has_role(ALLOWED_ROLE_ID)
 async def add_loss(interaction: discord.Interaction, user: discord.Member):
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
     c.execute('UPDATE stats SET losses = losses + 1, streak = 0 WHERE user_id = ?', (user.id,))
     conn.commit()
     await interaction.response.send_message(f"Added a loss to {user.mention}. Streak broken!")
-    await update_live_leaderboard(interaction.guild)
-
-@bot.tree.command(name="set_losses", description="Manually override a user's total losses balance")
-@app_commands.checks.has_role(ALLOWED_ROLE_ID)
-async def set_losses(interaction: discord.Interaction, user: discord.Member, amount: int):
-    if amount < 0:
-        await interaction.response.send_message("❌ Loss balance cannot be negative.", ephemeral=True)
-        return
-        
-    c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
-    c.execute('UPDATE stats SET losses = ? WHERE user_id = ?', (amount, user.id))
-    conn.commit()
-    await interaction.response.send_message(f"Set {user.mention}'s total losses to **{amount}**!")
     await update_live_leaderboard(interaction.guild)
 
 @bot.tree.command(name="remove_loss", description="Remove a loss")
