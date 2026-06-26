@@ -85,13 +85,13 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
                 except discord.HTTPException:
                     user = None
 
-            # FIXED: Avoid raw pings inside description fields to bypass the Discord app ID rendering glitch.
+            # Render the correct display configuration (Custom Name + @mention, or just standard names)
             if custom_name:
-                name_display = f"**{custom_name}**"
+                name_display = f"**{custom_name}** (<@{uid}>)"
             elif user:
-                name_display = f"**{user.display_name}**"
+                name_display = f"**{user.display_name}** (<@{uid}>)"
             else:
-                name_display = f"**Unknown ({uid})**"
+                name_display = f"**Unknown** (<@{uid}>)"
 
             flag = get_flag_emoji(country)
             streak_tag = f" | 🔥 **{streak}x Streak**" if streak >= 2 else ""
