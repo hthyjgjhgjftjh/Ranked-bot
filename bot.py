@@ -77,7 +77,6 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
             elif index == 2: medal = "🥉 "
             else: medal = f"**{rank}:** "
             
-            # Look up the user via cache or direct API call
             user = guild.get_member(uid)
             if not user:
                 try:
@@ -85,7 +84,6 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
                 except discord.HTTPException:
                     user = None
 
-            # FIXED: Avoid raw pings inside description fields to bypass the Discord app ID rendering glitch.
             if custom_name:
                 name_display = f"**{custom_name}**"
             elif user:
@@ -105,21 +103,9 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
     embed.set_footer(text=get_current_timestamp())
     return embed
 
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f'Logged in as {bot.user}')
-
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    if isinstance(error, app_commands.MissingRole):
-        await interaction.response.send_message("❌ You don't have the required role to use this command.", ephemeral=True)
-    else:
-        raise error
-
 # --- LIVE REFRESH HELPER ---
 async def update_live_leaderboard(guild: discord.Guild):
-    """Fetches data and automatically updates the active live tracking message."""
+    """Fetches data and automatically updates the active live tracking message across channels."""
     c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
     rows = c.fetchall()
     
@@ -137,7 +123,22 @@ async def update_live_leaderboard(guild: discord.Guild):
                 message = await channel.fetch_message(message_row[0])
                 await message.edit(embed=embed)
             except discord.NotFound:
-                pass
+                # If the tracked message was physically deleted from Discord, wipe it from config
+                c.execute('DELETE FROM config WHERE key = "message_id"')
+                c.execute('DELETE FROM config WHERE key = "channel_id"')
+                conn.commit()
+
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f'Logged in as {bot.user}')
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingRole):
+        await interaction.response.send_message("❌ You don't have the required role to use this command.", ephemeral=True)
+    else:
+        raise error
 
 # --- LEADERBOARD GROUP COMMANDS ---
 class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Leaderboard configurations"):
@@ -147,13 +148,24 @@ class LeaderboardGroup(app_commands.Group, name="leaderboard", description="Lead
     async def setup(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
+        # STRICT CHECK: Deny creation if a tracking reference already exists
+        c.execute('SELECT value_id FROM config WHERE key = "message_id"')
+        existing_board = c.fetchone()
+        
+        if existing_board:
+            await interaction.followup.send(
+                "❌ **Setup Denied:** An active live leaderboard already exists on this server.\n"
+                "You cannot spawn multiple concurrent tracking modules. Please delete or locate your active tracking block.", 
+                ephemeral=True
+            )
+            return
+
         c.execute('SELECT user_id, rank, streak, country, custom_name FROM stats WHERE rank > 0 ORDER BY rank ASC LIMIT 16')
         rows = c.fetchall()
         
         embed = await generate_leaderboard_embed(rows, interaction.guild)
         msg = await interaction.channel.send(embed=embed)
         
-        # Save this specific message to database config for live background tracking
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("channel_id", ?)', (interaction.channel_id,))
         c.execute('INSERT OR REPLACE INTO config (key, value_id) VALUES ("message_id", ?)', (msg.id,))
         conn.commit()
@@ -193,12 +205,10 @@ async def set_lb_position(interaction: discord.Interaction, user: discord.Member
         c.execute('UPDATE stats SET rank = rank - 1 WHERE rank > ?', (existing_row[0],))
 
     c.execute('UPDATE stats SET rank = rank + 1 WHERE rank >= ?', (position,))
-    
     c.execute('INSERT OR IGNORE INTO stats (user_id, wins, losses, ties, rank, streak, country, custom_name) VALUES (?, 0, 0, 0, 0, 0, "", "")', (user.id,))
-    
     c.execute('UPDATE stats SET rank = ?, country = ?, custom_name = ? WHERE user_id = ?', (position, country, custom_name, user.id))
     c.execute('UPDATE stats SET rank = 0 WHERE rank > 16')
-    conn.commit()  # Forces SQLite database file write immediately
+    conn.commit()
     
     await interaction.followup.send(f"Moved {user.mention} to rank {position}. Grid shifted!", ephemeral=False)
     await update_live_leaderboard(interaction.guild)
