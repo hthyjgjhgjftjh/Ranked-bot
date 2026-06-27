@@ -86,9 +86,9 @@ async def generate_leaderboard_embed(rows, guild: discord.Guild) -> discord.Embe
                 except discord.HTTPException:
                     user = None
 
-            # Render the correct display configuration (Custom Name + @mention, or just standard names)
-            if custom_name:
-                name_display = f"**{custom_name}** (<@{uid}>)"
+            # Strictly prioritize the Custom Name + @mention display
+            if custom_name and str(custom_name).strip():
+                name_display = f"**{str(custom_name).strip()}** (<@{uid}>)"
             elif user:
                 name_display = f"**{user.display_name}** (<@{uid}>)"
             else:
